@@ -29,31 +29,48 @@ A single-header implementation of a dynamic array library for C, similar to Rust
 2. Basic Usage Example | 2. 基本使用示例
 
 #include "vec.h"
+
 #include <stdio.h>
 
 int main() {
+
     // Create an array | 创建数组
+    
     int* nums = vec(int, 1, 2, 3, 4, 5);
     
     // Add elements | 添加元素
+    
     vec_push(nums, 6);
+    
     vec_push(nums, 7);
     
     // Iterate and display | 遍历显示
-    printf("Array contents: "); // 数组内容: 
+    
+    printf("Array contents: "); // 数组内容:
+    
     vec_for_each(nums, x) {
+    
         printf("%d ", x);
+        
     }
+    
     printf("\n");
     
     // Find an element | 查找元素
+    
     ssize_t idx = vec_find(nums, 4);
+    
     if (idx >= 0) {
+    
         printf("Found 4 at position: %zd\n", idx); // 找到 4 在位置: %zd\n
+        
     }
     
+    
     // Free memory | 释放内存
+    
     vec_free(nums);
+    
     return 0;
 }
 
