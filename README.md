@@ -13,10 +13,11 @@
 
 🚀 快速开始
 
-#include "vec.h" //引入头文件
-#include "vec.h" //从这里开始就是使用示例
+#include "vec.h" 
+//引入头文件
+#include "vec.h" 
+//从这里开始就是使用示例
 #include <stdio.h>
-
 int main() {
     // 创建数组
     int* nums = vec(int, 1, 2, 3, 4, 5);
