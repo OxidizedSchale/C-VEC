@@ -39,292 +39,202 @@ typedef struct {
     size_t cap;
     size_t stride;
     size_t align;
+    size_t header_size; /* 存储从底层块起始到数据区起始的字节偏移 */
 } VecHeader;
 
-/* --- 底层核心辅助 --- */
-static inline size_t _vec_h_size(size_t align) {
-    return (sizeof(VecHeader) + align - 1) & ~(align - 1);
-}
+/* --- 内部辅助函数 --- */
 
-#define _vec_h(v) ((VecHeader*)((char*)(v) - _vec_h_size(((VecHeader*)((char*)(v) - sizeof(VecHeader)))->align)))
+/**
+ * 获取 Header 的指针
+ * 逻辑：数据指针 v 的前一个 size_t 存储了 header_size 的值
+ */
+#define _vec_h(v) ((VecHeader*)((char*)(v) - *((size_t*)(v) - 1)))
+
+/**
+ * 计算对齐后的起始偏移
+ * 必须保证存储 VecHeader 后，剩下的起始地址符合 align 要求，
+ * 且额外留出一个 size_t 空间给 _vec_h 快速寻址。
+ */
+static inline size_t _vec_calculate_h_size(size_t align) {
+    size_t min_h = sizeof(VecHeader);
+    /* 必须留出至少一个 size_t 来存偏移量，且满足 align */
+    size_t offset = (min_h + align - 1) & ~(align - 1);
+    if (offset - min_h < sizeof(size_t)) {
+        offset += align;
+    }
+    return offset;
+}
 
 static inline void* _vec_grow(void* v, size_t inc, size_t stride, size_t align) {
     size_t cur_len = v ? _vec_h(v)->len : 0;
     size_t cur_cap = v ? _vec_h(v)->cap : 0;
     if (cur_len + inc <= cur_cap) return v;
-    size_t new_cap = cur_cap == 0 ? inc : cur_cap * 2 + inc;
-    size_t h_size = _vec_h_size(align);
-    void* new_ptr = realloc(v ? (char*)v - h_size : NULL, h_size + new_cap * stride);
+
+    size_t new_cap = cur_cap == 0 ? (inc > 4 ? inc : 4) : cur_cap * 2 + inc;
+    size_t h_size = _vec_calculate_h_size(align);
+    size_t total_size = h_size + new_cap * stride;
+
+    void* base = v ? (char*)v - _vec_h(v)->header_size : NULL;
+    void* new_ptr = realloc(base, total_size);
     if (!new_ptr) return NULL;
+
     VecHeader* h = (VecHeader*)new_ptr;
+    h->cap = new_cap;
+    h->stride = stride;
+    h->align = align;
+    h->header_size = h_size;
     if (!v) h->len = 0;
-    h->cap = new_cap; h->stride = stride; h->align = align;
-    return (char*)new_ptr + h_size;
+
+    void* data_ptr = (char*)new_ptr + h_size;
+    /* 在数据区前一个 size_t 位置埋下偏移量 */
+    *((size_t*)data_ptr - 1) = h_size;
+
+    return data_ptr;
 }
 
 static inline void* _vec_shrink(void* v, size_t stride, size_t align) {
     if (!v) return NULL;
     VecHeader* h = _vec_h(v);
     if (h->len * 4 >= h->cap || h->cap <= 4) return v;
+
     size_t new_cap = h->len > 0 ? h->len : 1;
-    size_t h_size = _vec_h_size(align);
+    size_t h_size = h->header_size;
     void* new_ptr = realloc((char*)v - h_size, h_size + new_cap * stride);
     if (!new_ptr) return v;
+
     ((VecHeader*)new_ptr)->cap = new_cap;
-    return (char*)new_ptr + h_size;
+    void* data_ptr = (char*)new_ptr + h_size;
+    *((size_t*)data_ptr - 1) = h_size;
+    return data_ptr;
 }
 
-/* --- 基础 API --- */
+/* --- 公共 API 宏 --- */
+
 #define vec_len(v) ((v) ? _vec_h(v)->len : 0)
 #define vec_cap(v) ((v) ? _vec_h(v)->cap : 0)
-#define vec_stride(v) ((v) ? _vec_h(v)->stride : 0)
-#define vec_align(v) ((v) ? _vec_h(v)->align : 0)
 
-#define vec_free(v) do { \
-    if (v) { free((char*)(v) - _vec_h_size(_vec_h(v)->align)); (v) = NULL; } \
-} while(0)
-
-#define vec_push(v, val) __extension__({ \
-    void* _tmp = _vec_grow((v), 1, sizeof(*(v)), alignof(*(v))); \
-    if (_tmp) { (v) = _tmp; (v)[_vec_h(v)->len++] = (val); } \
-    _tmp != NULL; \
+#define vec_free(v) __extension__({ \
+    typeof(v) _v = (v); \
+    if (_v) free((char*)_v - _vec_h(_v)->header_size); \
+    (v) = NULL; \
 })
 
-#define vec_pop(v) ((v) && vec_len(v) > 0 ? (v)[--_vec_h(v)->len] : (typeof(*(v))){0})
+#define vec_push(v, val) __extension__({ \
+    typeof(v) _v = (v); \
+    bool _ok = false; \
+    void* _res = _vec_grow(_v, 1, sizeof(*_v), alignof(*_v)); \
+    if (_res) { \
+        (v) = (typeof(v))_res; \
+        (v)[_vec_h(v)->len++] = (val); \
+        _ok = true; \
+    } \
+    _ok; \
+})
 
-#define vec_insert(v, idx, val) do { \
-    if ((v) && (idx) <= vec_len(v)) { \
-        void* _tmp = _vec_grow((v), 1, sizeof(*(v)), _vec_h(v)->align); \
-        if (_tmp) { \
-            (v) = _tmp; \
-            if ((idx) < vec_len(v)) \
-                memmove((v)+(idx)+1, (v)+(idx), (vec_len(v)-(idx))*sizeof(*(v))); \
-            (v)[idx] = (val); \
+#define vec_pop(v) __extension__({ \
+    typeof(v) _v = (v); \
+    assert(_v && _vec_h(_v)->len > 0); \
+    _v[--_vec_h(_v)->len]; \
+})
+
+#define vec_insert(v, idx, val) __extension__({ \
+    typeof(v) _v = (v); \
+    size_t _i = (idx); \
+    bool _ok = false; \
+    if (_i <= vec_len(_v)) { \
+        void* _res = _vec_grow(_v, 1, sizeof(*_v), alignof(*_v)); \
+        if (_res) { \
+            (v) = (typeof(v))_res; \
+            size_t _l = _vec_h(v)->len; \
+            if (_i < _l) \
+                memmove(&(v)[_i + 1], &(v)[_i], (_l - _i) * sizeof(*(v))); \
+            (v)[_i] = (val); \
             _vec_h(v)->len++; \
+            _ok = true; \
         } \
     } \
-} while(0)
+    _ok; \
+})
 
-#define vec_remove(v, idx) do { \
+#define vec_remove(v, idx) __extension__({ \
+    typeof(v) _v = (v); \
     size_t _i = (idx); \
-    if ((v) && _i < vec_len(v)) { \
-        memmove((v) + _i, (v) + _i + 1, (vec_len(v) - _i - 1) * sizeof(*(v))); \
-        _vec_h(v)->len--; \
-        (v) = _vec_shrink((v), sizeof(*(v)), _vec_h(v)->align); \
+    if (_v && _i < _vec_h(_v)->len) { \
+        size_t _l = _vec_h(_v)->len; \
+        if (_i < _l - 1) \
+            memmove(&_v[_i], &_v[_i + 1], (_l - _i - 1) * sizeof(*_v)); \
+        _vec_h(_v)->len--; \
+        (v) = (typeof(v))_vec_shrink(_v, sizeof(*_v), _vec_h(_v)->align); \
     } \
-} while(0)
+})
 
-#define vec_set(v, idx, val) do { \
-    if ((v) && (idx) < vec_len(v)) (v)[idx] = (val); \
-} while(0)
+/* 迭代器逻辑：修正副作用 */
+#define vec_for_each(v, elem) \
+    for (size_t _i = 0, _once = 1; _once && (v); _once = 0) \
+        for (size_t _len = _vec_h(v)->len; _i < _len && ((elem) = (v)[_i], 1); ++_i)
 
-#define vec_get(v, idx) ((v) && (idx) < vec_len(v) ? (v)[idx] : (typeof(*(v))){0})
+#define vec_enumerate(v, idx, elem) \
+    for (size_t idx = 0, _once = 1; _once && (v); _once = 0) \
+        for (size_t _len = _vec_h(v)->len; idx < _len && ((elem) = (v)[idx], 1); ++idx)
 
-#define vec_get_ptr(v, idx) ((v) && (idx) < vec_len(v) ? &(v)[idx] : NULL)
+/* 初始化宏：修复副作用并支持对齐 */
+#define vec(type, ...) __extension__({ \
+    type _tmp[] = { __VA_ARGS__ }; \
+    size_t _n = sizeof(_tmp)/sizeof(type); \
+    type* _v_ptr = (type*)_vec_grow(NULL, _n, sizeof(type), alignof(type)); \
+    if (_v_ptr) { \
+        memcpy(_v_ptr, _tmp, sizeof(_tmp)); \
+        _vec_h(_v_ptr)->len = _n; \
+    } \
+    _v_ptr; \
+})
 
 #define vec_clear(v) do { \
     if (v) { _vec_h(v)->len = 0; (v) = _vec_shrink((v), sizeof(*(v)), _vec_h(v)->align); } \
 } while(0)
 
-#define vec_swap(v, i, j) do { \
-    if ((v) && (i) < vec_len(v) && (j) < vec_len(v)) { \
-        typeof(*(v)) _tmp = (v)[i]; \
-        (v)[i] = (v)[j]; \
-        (v)[j] = _tmp; \
-    } \
-} while(0)
+/* --- 函数式操作 --- */
 
-#define vec_reverse(v) do { \
-    if (v) { \
-        size_t _len = vec_len(v); \
-        for (size_t _i = 0; _i < _len / 2; ++_i) { \
-            typeof(*(v)) _tmp = (v)[_i]; \
-            (v)[_i] = (v)[_len - _i - 1]; \
-            (v)[_len - _i - 1] = _tmp; \
-        } \
-    } \
-} while(0)
-
-#define vec_find(v, val) __extension__({ \
-    ssize_t _result = -1; \
-    if (v) for (size_t _i = 0; _i < vec_len(v); ++_i) \
-        if ((v)[_i] == (val)) { _result = _i; break; } \
-    _result; \
-})
-
-#define vec_contains(v, val) (vec_find(v, val) >= 0)
-
-/* --- 高级操作 --- */
-#define vec_sort(v, cmp) do { \
-    if ((v) && vec_len(v) > 1) qsort((v), vec_len(v), sizeof(*(v)), cmp); \
-} while(0)
-
-#define vec_shrink_to_fit(v) do { \
-    if (v) { \
-        size_t h_size = _vec_h_size(_vec_h(v)->align); \
-        void* _tmp = realloc((char*)(v) - h_size, h_size + vec_len(v) * sizeof(*(v))); \
-        if (_tmp) { ((VecHeader*)_tmp)->cap = vec_len(v); (v) = (char*)_tmp + h_size; } \
-    } \
-} while(0)
-
-#define vec_slice(v, start, end) __extension__({ \
+#define vec_filter(v, filter_fn) __extension__({ \
+    typeof(v) _v = (v); \
     typeof(v) _res = NULL; \
-    size_t _s = (start), _e = (end), _l = vec_len(v); \
-    if ((v) && _s < _e && _s < _l) { \
-        if (_e > _l) _e = _l; \
-        size_t _new_len = _e - _s; \
-        _res = _vec_grow(NULL, _new_len, sizeof(*(v)), _vec_h(v)->align); \
-        if (_res) { memcpy(_res, (v) + _s, _new_len * sizeof(*(v))); _vec_h(_res)->len = _new_len; } \
+    if (_v) { \
+        _res = (typeof(v))_vec_grow(NULL, _vec_h(_v)->len, sizeof(*_v), _vec_h(_v)->align); \
+        if (_res) { \
+            size_t _nl = 0; \
+            for(size_t _i=0; _i < _vec_h(_v)->len; ++_i) \
+                if(filter_fn(&_v[_i])) _res[_nl++] = _v[_i]; \
+            _vec_h(_res)->len = _nl; \
+            _res = (typeof(v))_vec_shrink(_res, sizeof(*_res), _vec_h(_res)->align); \
+        } \
     } \
     _res; \
 })
 
-#define vec_drain(v, start, end) do { \
-    size_t _s = (start), _e = (end), _l = vec_len(v); \
-    if ((v) && _s < _e && _s < _l) { \
-        if (_e > _l) _e = _l; \
-        size_t _count = _e - _s; \
-        memmove((v) + _s, (v) + _e, (_l - _e) * sizeof(*(v))); \
-        _vec_h(v)->len -= _count; \
-        (v) = _vec_shrink((v), sizeof(*(v)), _vec_h(v)->align); \
-    } \
-} while(0)
-
 #define vec_map(v, map_fn, out_type) __extension__({ \
+    typeof(v) _v = (v); \
     out_type* _res = NULL; \
-    if (v) { \
-        size_t _l = vec_len(v); \
-        _res = _vec_grow(NULL, _l, sizeof(out_type), alignof(out_type)); \
+    if (_v) { \
+        size_t _l = _vec_h(_v)->len; \
+        _res = (out_type*)_vec_grow(NULL, _l, sizeof(out_type), alignof(out_type)); \
         if (_res) { \
-            for(size_t _i=0; _i<_l; ++_i) _res[_i] = *(out_type*)map_fn(&(v)[_i]); \
+            for(size_t _i=0; _i<_l; ++_i) _res[_i] = map_fn(&_v[_i]); \
             _vec_h(_res)->len = _l; \
         } \
     } \
     _res; \
 })
 
-#define vec_filter(v, filter_fn) __extension__({ \
-    typeof(v) _res = NULL; \
-    if (v) { \
-        _res = _vec_grow(NULL, vec_len(v), sizeof(*(v)), _vec_h(v)->align); \
-        if (_res) { \
-            size_t _nl = 0; \
-            for(size_t _i=0; _i<vec_len(v); ++_i) \
-                if(filter_fn(&(v)[_i])) _res[_nl++] = (v)[_i]; \
-            _vec_h(_res)->len = _nl; \
-            _res = _vec_shrink(_res, sizeof(*(v)), _vec_h(_res)->align); \
-        } \
-    } \
-    _res; \
-})
-
-#define vec_repeat(type, val, count) __extension__({ \
-    type* _v = _vec_grow(NULL, (count), sizeof(type), alignof(type)); \
-    if (_v) { \
-        for(size_t _i=0; _i<(count); ++_i) _v[_i] = (val); \
-        _vec_h(_v)->len = (count); \
-    } \
-    _v; \
-})
-
-#define vec_dedup(v) __extension__({ \
-    typeof(v) _res = NULL; \
-    if (v) { \
-        _res = _vec_grow(NULL, vec_len(v), sizeof(*(v)), _vec_h(v)->align); \
-        size_t _nl = 0; \
-        for(size_t _i=0; _i<vec_len(v); ++_i) { \
-            bool _exists = false; \
-            for(size_t _j=0; _j<_nl; ++_j) \
-                if(memcmp(&(v)[_i], &_res[_j], sizeof(*(v))) == 0) { _exists = true; break; } \
-            if(!_exists) _res[_nl++] = (v)[_i]; \
-        } \
-        _vec_h(_res)->len = _nl; \
-        _res = _vec_shrink(_res, sizeof(*(v)), _vec_h(_res)->align); \
-    } \
-    _res; \
-})
-
-#define vec_dedup_sorted(v) do { \
-    if ((v) && vec_len(v) > 1) { \
-        size_t _nl = 1; \
-        for(size_t _i=1; _i<vec_len(v); ++_i) \
-            if(memcmp(&(v)[_i], &(v)[_nl-1], sizeof(*(v))) != 0) (v)[_nl++] = (v)[_i]; \
-        _vec_h(v)->len = _nl; \
-        (v) = _vec_shrink((v), sizeof(*(v)), _vec_h(v)->align); \
-    } \
-} while(0)
-
-#define vec_unique(v, cmp) do { \
-    if (v) { \
-        vec_sort(v, cmp); \
-        vec_dedup_sorted(v); \
-    } \
-} while(0)
-
-/* --- 迭代器宏 --- */
-#define vec_for_each(v, elem) \
-    for (size_t _i = 0, _len = vec_len(v); _i < _len && ((elem) = (v)[_i], 1); ++_i)
-
-#define vec_enumerate(v, idx, elem) \
-    for (size_t idx = 0, _len = vec_len(v); idx < _len && ((elem) = (v)[idx], 1); ++idx)
-
-#define VecIter(type) struct { type* ptr; size_t idx; size_t len; }
-#define vec_iter(v) { (v), 0, vec_len(v) }
-#define iter_next(it) ((it).idx < (it).len ? &(it).ptr[(it).idx++] : NULL)
-#define iter_has_next(it) ((it).idx < (it).len)
-#define iter_reset(it) ((it).idx = 0)
-
-/* --- 显示功能 --- */
+/* --- 调试显示 --- */
 #define vec_show(v, fmt) do { \
-    if (v) { \
-        printf("Vec<%zu/%zu>: [", vec_len(v), vec_cap(v)); \
-        for(size_t _i=0; _i<vec_len(v); ++_i) { \
-            printf(fmt, (v)[_i]); if(_i < vec_len(v)-1) printf(", "); \
+    typeof(v) _v_dbg = (v); \
+    if (_v_dbg) { \
+        printf("Vec<%zu/%zu>: [", _vec_h(_v_dbg)->len, _vec_h(_v_dbg)->cap); \
+        for(size_t _i=0; _i < _vec_h(_v_dbg)->len; ++_i) { \
+            printf(fmt, _v_dbg[_i]); if(_i < _vec_h(_v_dbg)->len-1) printf(", "); \
         } \
         printf("]\n"); \
     } else printf("Vec: (null)\n"); \
 } while(0)
-
-#define vec_show_custom(v, pfn) do { \
-    if (v) { \
-        printf("Vec<%zu/%zu>: [", vec_len(v), vec_cap(v)); \
-        for(size_t _i=0; _i<vec_len(v); ++_i) { \
-            pfn(&(v)[_i]); if(_i < vec_len(v)-1) printf(", "); \
-        } \
-        printf("]\n"); \
-    } else printf("Vec: (null)\n"); \
-} while(0)
-
-#define vec_show_int(v) vec_show(v, "%d")
-#define vec_show_char(v) vec_show(v, "'%c'")
-#define vec_show_string(v) vec_show(v, "\"%s\"")
-#define vec_show_pointer(v) vec_show(v, "%p")
-#define vec_show_float(v) vec_show(v, "%.2f")
-#define vec_show_double(v) vec_show(v, "%.4f")
-
-/* --- 初始化器 --- */
-#define vec(type, ...) __extension__({ \
-    type _tmp[] = { __VA_ARGS__ }; \
-    size_t _n = sizeof(_tmp)/sizeof(type); \
-    type* _v = _vec_grow(NULL, _n, sizeof(type), alignof(type)); \
-    if (_v) { memcpy(_v, _tmp, sizeof(_tmp)); _vec_h(_v)->len = _n; } \
-    _v; \
-})
-
-#define vec_with_capacity(type, cap) \
-    (type*)_vec_grow(NULL, (cap), sizeof(type), alignof(type))
-
-#define vec_clone(v) __extension__({ \
-    typeof(v) _res = NULL; \
-    if (v) { \
-        size_t _len = vec_len(v); \
-        _res = _vec_grow(NULL, _len, sizeof(*(v)), _vec_h(v)->align); \
-        if (_res) { \
-            memcpy(_res, v, _len * sizeof(*(v))); \
-            _vec_h(_res)->len = _len; \
-        } \
-    } \
-    _res; \
-})
 
 #endif /* VEC_H */
