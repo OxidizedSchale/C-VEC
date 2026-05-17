@@ -1,128 +1,124 @@
 [English](./README_global/README_en.md)
-# C-VEC: C 语言动态数组库
 
-一个用单头文件实现的、类似 Rust "Vec" 的 C 语言动态数组库。零依赖，类型安全，API 设计优雅。
+# C-VEC 🚀
 
-# ✨ 特性
+**A Modern, Type-Safe, Rust-inspired Dynamic Array for C (GCC/Clang)**
 
-- **单头文件**：只需包含 `vec.h`，无需额外依赖，方便集成。
-- **类型安全**：通过宏实现编译时类型检查，减少运行时错误。
-- **自动内存管理**：自动扩容/缩容，开发者无需手动管理容量细节。
-- **丰富 API**：提供 push/pop/insert/remove/filter/map 等完整操作。
-- **多种迭代方式**：支持值迭代、索引迭代、和指针迭代。
-- **内存对齐优化**：支持 `alignof`，能够正确处理特殊数据类型。
-- **类似 Rust 的 API**：熟悉现代编程语言（如 Rust, Go）的开发者可快速上手。
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![C](https://img.shields.io/badge/C-11%2F17%2F23-orange.svg)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
+[![Compiler](https://img.shields.io/badge/Compiler-GCC%2FClang-green.svg)](#)
 
-# 🚀 快速开始
+`C-VEC` 是一个极其轻量、单头文件的 C 语言动态数组库。它不仅在 API 上致敬了 Rust 的 `Vec`，更利用现代编译器特性解决了 C 语言动态数组长期以来的痛点：内存管理混乱、类型不安全以及难以对齐。
 
-### 1. 引入头文件
+---
 
-将 `vec.h` 复制到你的项目中并包含：
+## ✨ 核心特性
+
+*   **🛡️ 真正的 RAII 支持**: 利用 GNU 扩展 `__attribute__((cleanup))`，实现变量作用域结束自动释放。
+*   **💉 原地指针更新**: 告别 `v = vec_push(v, x)`！宏会自动捕获地址并更新你的指针，防止 `realloc` 后的野指针问题。
+*   **🔒 工业级安全性**: 
+    *   **Realloc 保护**: 分配失败时保留原内存，绝不因失败导致内存泄漏。
+    *   **零副作用**: 宏内部参数捕获，即使传入 `vec_push(v, i++)` 也不会导致逻辑崩溃。
+*   **📐 智能对齐**: 自动处理内存对齐（Alignment），完美支持 SIMD 等对内存边界敏感的数据类型。
+*   **🍎 函数式风格**: 内置 `filter`、`map`、`enumerate` 等迭代工具。
+*   **📦 单头文件**: 零依赖，拷贝 `vec.h` 即可食用。
+
+---
+
+## 🚀 快速上手
+
+### 1. 基础用法
 ```c
 #include "vec.h"
-```
-
-### 2. 基本使用示例
-
-```c
-#include "vec.h"
-#include <stdio.h>
 
 int main() {
-    // 1. 创建数组并初始化
-    int* nums = vec(int, 1, 2, 3, 4, 5);
-    
-    // 2. 添加元素
-    vec_push(nums, 6);
-    vec_push(nums, 7);
-    
-    // 3. 遍历显示
-    printf("数组内容: ");
+    // 像 Rust 一样初始化
+    int* nums = vec(int, 1, 2, 3);
+
+    // 原地推入元素，不需要重新赋值给 nums
+    vec_push(nums, 4);
+    vec_push(nums, 5);
+
+    // 优雅的迭代
     vec_for_each(nums, x) {
         printf("%d ", x);
     }
-    printf("\n");
-    
-    // 4. 查找元素
-    ssize_t idx = vec_find(nums, 4);
-    if (idx >= 0) {
-        printf("找到数字 4，位置在索引: %zd\n", idx);
-    }
-    
-    // 5. 释放内存
+
     vec_free(nums);
-    
     return 0;
 }
 ```
 
-# 📚 API 概览
-
-### 创建与销毁
-- `vec(type, ...)`：从初始值列表创建数组。
-- `vec_with_capacity(type, cap)`：指定初始容量创建空数组。
-- `vec_clone(v)`：克隆一个现有的数组。
-- `vec_free(v)`：安全释放数组内存。
-
-### 基本操作
-- `vec_push(v, val)`：在末尾添加一个元素。
-- `vec_pop(v)`：弹出并返回最后一个元素。
-- `vec_insert(v, idx, val)`：在指定索引处插入元素。
-- `vec_remove(v, idx)`：删除指定索引处的元素。
-- `vec_get(v, idx)`：获取指定索引的元素值。
-- `vec_set(v, idx, val)`：设置指定索引的元素值。
-
-### 属性查询
-- `vec_len(v)`：获取数组当前的元素个数。
-- `vec_cap(v)`：获取数组当前的内存容量。
-- `vec_empty(v)`：判断数组是否为空。
-
-### 高级操作
-- `vec_sort(v, cmp)`：使用自定义比较函数进行排序。
-- `vec_filter(v, filter_fn)`：根据谓词函数过滤元素。
-- `vec_map(v, map_fn, out_type)`：通过映射函数转换元素。
-- `vec_reduce(v, init, reduce_fn)`：将数组归约为单一值。
-- `vec_slice(v, start, end)`：获取子数组切片。
-- `vec_reverse(v)`：原地反转数组。
-
-### 迭代器
-- `vec_for_each(v, elem)`：值迭代。
-- `vec_enumerate(v, idx, elem)`：带索引迭代。
-- `VecIter(type)`：结构体迭代器，用于更复杂的遍历逻辑。
-
-### 显示与调试
-- `vec_show_int(v)`：打印整数数组内容。
-- `vec_show(v, fmt)`：根据自定义格式化字符串打印。
-- `vec_show_custom(v, pfn)`：使用自定义打印函数显示。
-
-# 🔧 编译要求
-
-- **编译器**：需支持 GNU C 扩展的编译器（如 GCC 或 Clang）。
-- **标准**：C99 或更高标准。
-- **标准库依赖**：`stdlib.h`, `string.h`, `stddef.h`, `stdbool.h`。
-
-# 📦 内存管理策略
-
-- **初始容量**：最小为 4 个元素。
-- **扩容策略**：当空间不足时，容量翻倍（2x）。
-- **缩容策略**：当空间利用率低于 25% 时自动缩容。
-- **最小限制**：缩容后最小保留 4 个元素的空间。
-
-# ⚠️ 注意事项
-
-- **编译器兼容性**：由于使用了 GNU 扩展（如 `__typeof__` 和语句表达式），仅支持 GCC 和 Clang。
-- **线程安全**：本库非线程安全。若在多线程环境下使用，需自行加锁。
-- **错误检查**：对于关键操作，建议通过 `vec_len` 等检查结果。
-- **性能提示**：`vec_dedup`（去重）操作的时间复杂度为 $O(n^2)$，对于大数据集建议先排序。
-
-# 📄 许可证
-
-本项目采用 **Apache-2.0** 许可证。详见 `LICENSE` 文件。
-
-# 🎯 设计理念
-
-C-VEC 旨在为 C 语言开发者提供一种现代、安全、易用的动态数组体验，同时保持零依赖和极小的运行时开销。API 设计深度参考了 Rust 的 `Vec` 容器，旨在让习惯了现代语言开发的程序员在编写底层 C 代码时也能感受到便利。
+### 2. 开启 RAII 模式 (自动释放)
+再也不用担心函数分支过多导致的 `free` 遗漏：
+```c
+void heavy_logic() {
+    // 作用域结束时自动调用 vec_free
+    vec_auto(float*) data = vec(float, 1.0f, 2.0f);
+    
+    if (some_error) return; // 自动释放！
+    
+    vec_push(data, 3.0f);
+} // 自动释放！
+```
 
 ---
 
-**开始使用**：只需将 `vec.h` 复制到你的项目中，即可开启现代动态数组的开发之旅！
+## 🛠 技术深度：内存布局
+
+C-VEC 采用了一种改进的 **"Hidden Header with Buried Offset"** 设计，以支持严格的内存对齐：
+
+```text
+[ VecHeader | Padding | HeaderOffset (size_t) ] [ User Data (Aligned) ]
+                                ^                     ^
+                                |                     |
+                          元数据回溯索引          用户持有的指针 (v)
+```
+
+当调用 `vec_push` 时，宏会通过 `&v` 获取你的指针地址。如果发生扩容，它会透明地修改你原本的指针变量，确保你持有的永远是有效的地址。
+
+---
+
+## 📖 API 概览
+
+### 生命周期
+| 宏 / 函数 | 描述 |
+| :--- | :--- |
+| `vec(type, ...)` | 创建并初始化 Vec |
+| `vec_auto(type)` | (RAII) 声明一个自动释放的 Vec |
+| `vec_free(v)` | 手动释放内存并置空 |
+| `vec_clear(v)` | 清空元素，保持容量 |
+
+### 动态操作
+| 宏 / 函数 | 描述 |
+| :--- | :--- |
+| `vec_push(v, val)` | **(原地更新)** 末尾压入元素 |
+| `vec_pop(v)` | 弹出末尾元素 |
+| `vec_insert(v, idx, val)` | 在指定索引处插入 |
+| `vec_remove(v, idx)` | 删除指定索引元素（保持顺序） |
+
+### 迭代与函数式
+| 宏 / 函数 | 描述 |
+| :--- | :--- |
+| `vec_for_each(v, elem)` | 遍历元素 |
+| `vec_enumerate(v, i, elem)` | 带索引遍历 |
+| `vec_filter(v, fn)` | 过滤元素并返回新 Vec |
+| `vec_map(v, fn, out_type)` | 映射元素并返回新 Vec |
+
+---
+
+## ⚠️ 限制
+
+*   **编译器**: 仅支持 **GCC** 或 **Clang**（依赖 `__extension__`, `typeof` 和 `cleanup` 属性）。
+*   **标准**: 建议开启 `C11` 或更高版本。
+
+---
+
+## 📜 许可证
+
+本项目采用 [Apache-2.0](LICENSE) 许可证。
+
+---
+
+**OxidizedSchale** 制作 
+"Make C feel like Rust, one macro at a time."
