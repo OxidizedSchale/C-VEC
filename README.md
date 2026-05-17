@@ -1,3 +1,4 @@
+[English](./README_global/README_en.md)
 # C-VEC: C 语言动态数组库
 
 一个用单头文件实现的、类似 Rust "Vec" 的 C 语言动态数组库。零依赖，类型安全，API 设计优雅。
