@@ -13,13 +13,8 @@
 
 🚀 快速开始
 
-1. 引入头文件
-
-#include "vec.h"
-
-2. 基本使用示例
-
-#include "vec.h"
+#include "vec.h" //引入头文件
+#include "vec.h" //从这里开始就是使用示例
 #include <stdio.h>
 
 int main() {
@@ -49,7 +44,8 @@ int main() {
     return 0;
 }
 
-📚 API 概览
+
+# 📚 API 概览
 
 创建与销毁
 
