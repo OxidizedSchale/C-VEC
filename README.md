@@ -13,28 +13,36 @@
 
 🚀 快速开始
 
-#include "vec.h" 
-//引入头文件
-#include "vec.h" 
-//从这里开始就是使用示例
+#include "vec.h"
+
+#include "vec.h"
+
 #include <stdio.h>
+
 int main() {
+
     // 创建数组
     int* nums = vec(int, 1, 2, 3, 4, 5);
     
     // 添加元素
     vec_push(nums, 6);
+    
     vec_push(nums, 7);
     
     // 遍历显示
     printf("数组内容: ");
+    
     vec_for_each(nums, x) {
+    
         printf("%d ", x);
+        
     }
+    
     printf("\n");
     
     // 查找元素
     ssize_t idx = vec_find(nums, 4);
+    
     if (idx >= 0) {
         printf("找到 4 在位置: %zd\n", idx);
     }
@@ -43,6 +51,7 @@ int main() {
     vec_free(nums);
     
     return 0;
+    
 }
 
 
